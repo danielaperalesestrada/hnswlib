@@ -1,7 +1,7 @@
 // Assumes that chroma-hnswlib is checked out at the same level as chroma
 #include "../hnswlib/hnswlib.h"
 #include "../hnswlib/hnswalg.h"
-
+#include "../hnswlib/hnswalg_adaptive.h"
 class AllowAndDisallowListFilterFunctor : public hnswlib::BaseFilterFunctor
 {
 public:
@@ -41,7 +41,8 @@ public:
   bool normalize;
   bool index_inited;
 
-  hnswlib::HierarchicalNSW<dist_t> *appr_alg;
+  //hnswlib::HierarchicalNSW<dist_t> *appr_alg;
+  hnswlib::HierarchicalNSWAdaptive<dist_t> *appr_alg;
   hnswlib::SpaceInterface<float> *l2space;
 
   Index(const std::string &space_name, const int dim) : space_name(space_name), dim(dim)
@@ -82,7 +83,7 @@ public:
     {
       throw std::runtime_error("Index already inited");
     }
-    appr_alg = new hnswlib::HierarchicalNSW<dist_t>(l2space, max_elements, M, ef_construction, random_seed, allow_replace_deleted, normalize, is_persistent_index, persistence_location);
+    appr_alg = new hnswlib::HierarchicalNSWAdaptive<dist_t>(l2space, max_elements, M, ef_construction, random_seed, allow_replace_deleted, normalize, is_persistent_index, persistence_location);
     appr_alg->ef_ = 10; // This is a default value for ef_
     index_inited = true;
   }
@@ -93,7 +94,7 @@ public:
     {
       throw std::runtime_error("Index already inited");
     }
-    appr_alg = new hnswlib::HierarchicalNSW<dist_t>(l2space, path_to_index, false, max_elements, allow_replace_deleted, normalize, is_persistent_index);
+    appr_alg = new hnswlib::HierarchicalNSWAdaptive<dist_t>(l2space, path_to_index, false, max_elements, allow_replace_deleted, normalize, is_persistent_index);
     // TODO(rescrv,sicheng): check integrity
     // appr_alg->checkIntegrity();
     index_inited = true;
@@ -117,7 +118,7 @@ public:
     std::string index_str(index_buffer, index_len);
     std::string deleted_str(deleted_buffer, deleted_len);
     
-    appr_alg = new hnswlib::HierarchicalNSW<dist_t>(l2space, header_str.c_str(), data_str.c_str(), 
+    appr_alg = new hnswlib::HierarchicalNSWAdaptive<dist_t>(l2space, header_str.c_str(), data_str.c_str(), 
                                                     index_str.c_str(), deleted_str.c_str(), 
                                                     false, max_elements, allow_replace_deleted, normalize);
     // TODO(rescrv,sicheng): check integrity
@@ -625,7 +626,7 @@ extern "C"
     try
     {
 
-      index->appr_alg = new hnswlib::HierarchicalNSW<float>(index->l2space, 
+      index->appr_alg = new hnswlib::HierarchicalNSWAdaptive<float>(index->l2space, 
                                                             *data, false,
                                                             max_elements, false,
                                                             index->normalize);
