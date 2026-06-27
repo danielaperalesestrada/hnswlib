@@ -1659,7 +1659,7 @@ namespace hnswlib
          * Adds point. Updates the point if it is already in the index.
          * If replacement of deleted elements is enabled: replaces previously deleted point if any, updating it with new point
          */
-        void addPoint(const void *data_point, labeltype label, bool replace_deleted = false)
+        virtual void addPoint(const void *data_point, labeltype label, bool replace_deleted = false)
         {
             if ((allow_replace_deleted_ == false) && (replace_deleted == true))
             {
@@ -2041,7 +2041,7 @@ namespace hnswlib
             return cur_c;
         }
 
-        std::priority_queue<std::pair<dist_t, labeltype>>
+        virtual std::priority_queue<std::pair<dist_t, labeltype>>
         searchKnn(const void *query_data, size_t k, BaseFilterFunctor *isIdAllowed = nullptr) const
         {
             std::priority_queue<std::pair<dist_t, labeltype>> result;
