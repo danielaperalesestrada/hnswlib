@@ -4,6 +4,7 @@
 #include <pybind11/numpy.h>
 #include <pybind11/stl.h>
 #include "hnswlib.h"
+#include "hnswalg_adaptive.h"
 #include <thread>
 #include <atomic>
 #include <stdlib.h>
@@ -181,6 +182,7 @@ public:
     int num_threads_default;
     hnswlib::labeltype cur_l;
     hnswlib::HierarchicalNSW<dist_t> *appr_alg;
+    //hnswlib::HierarchicalNSWAdaptive<dist_t> *appr_alg;
     hnswlib::SpaceInterface<float> *l2space;
 
     Index(const std::string &space_name, const int dim) : space_name(space_name), dim(dim)
@@ -232,7 +234,7 @@ public:
             throw std::runtime_error("The index is already initiated.");
         }
         cur_l = 0;
-        appr_alg = new hnswlib::HierarchicalNSW<dist_t>(l2space, maxElements, M, efConstruction, random_seed, allow_replace_deleted, normalize, is_persistent_index, persistence_location);
+        appr_alg = new hnswlib::HierarchicalNSWAdaptive<dist_t>(l2space, maxElements, M, efConstruction, random_seed, allow_replace_deleted, normalize, is_persistent_index, persistence_location);
         index_inited = true;
         ep_added = false;
         appr_alg->ef_ = default_ef;
@@ -530,12 +532,13 @@ public:
 
         if (index_inited_)
         {
-            new_index->appr_alg = new hnswlib::HierarchicalNSW<dist_t>(
+            new_index->appr_alg = new hnswlib::HierarchicalNSWAdaptive<dist_t>(
                 new_index->l2space,
                 d["max_elements"].cast<size_t>(),
                 d["M"].cast<size_t>(),
                 d["ef_construction"].cast<size_t>(),
                 new_index->seed);
+            throw std::runtime_error("CREATEFROMPARAMS_ADAPTIVE_WORKING");
             new_index->cur_l = d["cur_element_count"].cast<size_t>();
         }
 
