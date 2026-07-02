@@ -55,7 +55,7 @@ Esta versión modificada es compatible con **Chroma 0.5.20**. Para usarla:
 
 ```bash
 # 1. Clonar este repo
-git clone https://github.com/tu-usuario/hnswlib.git
+git clone https://github.com/danielaperalesestrada/hnswlib.git
 cd hnswlib
 
 # 2. Crear entorno virtual (usar x64 Native Tools Command Prompt en Windows)
@@ -78,9 +78,34 @@ pip install onnxruntime posthog opentelemetry-instrumentation-fastapi
 
 > **Importante:** No ejecutar Python desde la carpeta raíz del repo para evitar conflictos con el módulo Python.
 
-## Resultados
+## Desarrollo y pruebas
 
-*Pendiente — se añadirán los resultados de benchmarks comparando HierarchicalNSW original vs HierarchicalNSWAdaptive en términos de recall, tiempo de inserción y tiempo de búsqueda.*
+### Recompilar tras modificar el código
+
+Cualquier cambio en `hnswlib/hnswalg_adaptive.h` u otro archivo `.h`/`.cpp` requiere recompilar la extensión antes de que el cambio se refleje en Python. Desde la **x64 Native Tools Command Prompt**, parado en la raíz del repo:
+
+```bash
+# 1. Borrar el build anterior para forzar una recompilación limpia
+rmdir /s /q build
+
+# 2. Volver a compilar la extensión in-place
+python setup.py build_ext --inplace
+```
+
+> Si solo editaste un `.h`/`.cpp` y `build_ext --inplace` no detecta el cambio, borrar `build/` primero (paso 1) evita que queden objetos compilados desactualizados.
+
+### Ejecutar los benchmarks
+
+El script `benchmarks/bench_comparison.py` compara el HNSW original (hnswlib directo) contra la versión adaptativa (operada a través de Chroma) en cuatro escenarios de datos: uniforme en alta dimensión, clusters en alta dimensión, uniforme en baja dimensión, y un subconjunto real del dataset SIFT. Para cada escenario reporta recall@10, tiempo de inserción y tiempo de búsqueda promedio, además de una comparación final con una prueba de significancia estadística (Welch) sobre el escenario de clusters.
+
+```bash
+python benchmarks\bench_comparison.py
+```
+
+> El escenario con datos reales (SIFT) descarga automáticamente el dataset (`sift-128-euclidean.hdf5`, ~500MB) la primera vez que se ejecuta, si no lo encuentra en el directorio de trabajo. Este script requiere además `h5py`, que no está listado en la instalación base:
+> ```bash
+> pip install h5py
+> ```
 
 ## Estructura del proyecto
 
@@ -94,9 +119,8 @@ hnswlib/
 │   └── bindings.cpp           # Bindings Python (modificado)
 ├── src/
 │   └── bindings.cpp           # Bindings Rust/C (modificado)
-├── benchmarks/
-│   └── bench_comparison.cpp   # Benchmark C++ (escenarios A, B, C)
-└── benchmarks_chroma/         # ← Benchmarks con Chroma (nuevo)
+└── benchmarks/
+    └── bench_comparison.py    # Benchmark
 ```
 
 ## Autor
