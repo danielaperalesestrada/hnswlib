@@ -16,11 +16,6 @@ if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
       SET( CMAKE_CXX_FLAGS  "/O2 -DHAVE_CXX0X /W1 /openmp /EHsc" )
     endif()
 
-    add_executable(
-        bench_comparison
-        benchmarks/bench_comparison.cpp
-    )
-
     # examples
     add_executable(example_search examples/cpp/example_search.cpp)
     target_link_libraries(example_search hnswlib)
