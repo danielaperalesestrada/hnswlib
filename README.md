@@ -1,6 +1,6 @@
 # Chroma-HNSWlib Adaptativo
 
-Fork modificado de [chroma-hnswlib](https://github.com/chroma-core/hnswlib) desarrollado como trabajo para el curso de **Estructuras de Datos Avanzadas**.
+Versión modificada de [chroma-hnswlib](https://github.com/chroma-core/hnswlib) desarrollado como trabajo para el curso de **Estructuras de Datos Avanzadas**.
 
 ## Objetivo
 
@@ -69,7 +69,7 @@ pip install numpy pybind11 setuptools wheel
 python setup.py build_ext --inplace
 pip install -e .
 
-# 5. Instalar Chroma (sin sobreescribir tu hnswlib)
+# 5. Instalar Chroma
 pip install chromadb==0.5.20 --no-deps
 pip install onnxruntime posthog opentelemetry-instrumentation-fastapi
 ```
