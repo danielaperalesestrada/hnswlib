@@ -13,3 +13,4 @@ var/
 *.egg-info/
 venv/
 target
+sift-128-euclidean.hdf5
