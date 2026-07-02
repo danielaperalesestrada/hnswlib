@@ -14,7 +14,8 @@ public:
     using Base = HierarchicalNSW<dist_t>;
     using typename Base::CompareByFirst;
     struct AdaptiveConfig {
-        size_t sample_k = 8;
+        size_t sample_k = 16;
+        size_t probe_descend_levels = 1;
 
         float w_density = 0.4f;
         float w_variance = 0.4f;
@@ -54,11 +55,11 @@ public:
                             bool normalize = false,
                             bool persist_on_write = false,
                             const std::string& persist_location = "")
-        : Base(s, max_elements, M, ef_construction, random_seed,
-               allow_replace_deleted, normalize, persist_on_write,
-               persist_location),
-          ema_mean_dist_(0.0f),
-          ema_initialized_(false) {}
+    : Base(s, max_elements, M, ef_construction, random_seed,
+            allow_replace_deleted, normalize, persist_on_write,
+            persist_location),
+            ema_mean_dist_(0.0f),
+            ema_initialized_(false) {}
 
     struct AdaptiveState {
         float density_score = 0.5f;
@@ -70,15 +71,15 @@ public:
 
         float revSizeScale(const AdaptiveConfig& c) const {
             if (!valid) return 1.0f;
-            float t = density_score;
-            return c.ml_scale_max - t * (c.ml_scale_max - c.ml_scale_min);
+            float t = 1.0f - density_score; 
+            return c.ml_scale_min + t * (c.ml_scale_max - c.ml_scale_min);
         }
 
         float efConstructionScale(const AdaptiveConfig& c) const {
             if (!valid) return 1.0f;
             float scale = 1.0f + c.ef_c_density_gain * density_score +
-                          c.ef_c_variance_gain * variance_score +
-                          c.ef_c_skewness_gain * skewness_score;
+                        c.ef_c_variance_gain * variance_score +
+                        c.ef_c_skewness_gain * skewness_score;
             if (is_frontier) scale += c.ef_c_frontier_boost;
             return scale;
         }
@@ -90,24 +91,18 @@ public:
         }
 
         float angularThreshold(const AdaptiveConfig& c) const {
-            return c.angular_thresh_base -
-                   c.angular_thresh_delta * density_score;
+            return c.angular_thresh_base - c.angular_thresh_delta * density_score;
         }
 
         float efSearchScale(const AdaptiveConfig& c) const {
             if (!valid) return 1.0f;
-            float base_scale =
-                c.ef_s_scale_min +
-                difficulty * (c.ef_s_scale_max - c.ef_s_scale_min);
-            float skew_boost =
-                c.ef_s_skewness_boost * std::tanh(skewness_score * 2.0f);
-            return std::min(c.ef_s_scale_max + c.ef_s_skewness_boost,
-                            base_scale + skew_boost);
+            float base_scale = c.ef_s_scale_min + difficulty * (c.ef_s_scale_max - c.ef_s_scale_min);
+            float skew_boost = c.ef_s_skewness_boost * std::tanh(skewness_score * 2.0f);
+            return std::min(c.ef_s_scale_max + c.ef_s_skewness_boost, base_scale + skew_boost);
         }
     };
 
-    void addPoint(const void* data_point, labeltype label,
-                  bool replace_deleted = false) override {
+    void addPoint(const void* data_point, labeltype label, bool replace_deleted = false) override {
         {
             std::unique_lock<std::mutex> lock_table(this->label_lookup_lock);
             auto it = this->label_lookup_.find(label);
@@ -122,8 +117,7 @@ public:
         {
             std::unique_lock<std::mutex> lock_table(this->label_lookup_lock);
             if (this->cur_element_count >= this->max_elements_)
-                throw std::runtime_error(
-                    "The number of elements exceeds the specified limit");
+                throw std::runtime_error("The number of elements exceeds the specified limit");
             cur_c = this->cur_element_count++;
             this->label_lookup_[label] = cur_c;
         }
@@ -133,21 +127,42 @@ public:
         AdaptiveState state;
 
         AdaptiveState state_M1;
-        if (cfg.ml_scale_max > 1.0f && (signed)this->enterpoint_node_ != -1 &&
-            this->maxlevel_ > 0) {
+        if (cfg.ml_scale_max > 1.0f && (signed)this->enterpoint_node_ != -1 && this->maxlevel_ > 0) {
+            tableint probe_obj = this->enterpoint_node_;
+            dist_t probe_dist = this->fstdistfunc_(data_point, this->getDataByInternalId(probe_obj), this->dist_func_param_);
+
+            int top_lev = this->maxlevel_;
+            int stop_lev = std::max(0, top_lev - (int)cfg.probe_descend_levels);
+            int cur_lev = top_lev;
+
+            for (; cur_lev > stop_lev; cur_lev--) {
+                bool changed = true;
+                while (changed) {
+                    changed = false;
+                    unsigned int* d = this->get_linklist(probe_obj, cur_lev);
+                    int sz = this->getListCount(d);
+                    auto* dl = (tableint*)(d + 1);
+                    for (int i = 0; i < sz; i++) {
+                        dist_t dd = this->fstdistfunc_(
+                            data_point, this->getDataByInternalId(dl[i]), this->dist_func_param_);
+                        if (dd < probe_dist) {
+                            probe_dist = dd;
+                            probe_obj = dl[i];
+                            changed = true;
+                        }
+                    }
+                }
+            }
+
             std::vector<dist_t> quick_samples;
-            tableint ep = this->enterpoint_node_;
-            unsigned int* top_links = this->get_linklist(ep, this->maxlevel_);
-            int sz = this->getListCount(top_links);
-            auto* dl = (tableint*)(top_links + 1);
-            dist_t d0 =
-                this->fstdistfunc_(data_point, this->getDataByInternalId(ep),
-                                   this->dist_func_param_);
-            quick_samples.push_back(d0);
-            for (int i = 0; i < sz && quick_samples.size() <= cfg.sample_k; i++)
-                quick_samples.push_back(this->fstdistfunc_(
-                    data_point, this->getDataByInternalId(dl[i]),
-                    this->dist_func_param_));
+            quick_samples.push_back(probe_dist);
+
+            unsigned int* local_links = (cur_lev == 0) ? this->get_linklist0(probe_obj) : this->get_linklist(probe_obj, cur_lev);
+            int lsz = this->getListCount(local_links);
+            auto* ldl = (tableint*)(local_links + 1);
+            for (int i = 0; i < lsz && quick_samples.size() <= cfg.sample_k; i++)
+                quick_samples.push_back(this->fstdistfunc_(data_point, this->getDataByInternalId(ldl[i]), this->dist_func_param_));
+
             state_M1 = buildState(quick_samples);
         }
         int curlevel =
@@ -161,30 +176,25 @@ public:
         tableint currObj = this->enterpoint_node_;
         tableint enterpoint_copy = this->enterpoint_node_;
 
-        memset(this->data_level0_memory_ +
-                   cur_c * this->size_data_per_element_ + this->offsetLevel0_,
-               0, this->size_data_per_element_);
+        memset(this->data_level0_memory_ + cur_c * this->size_data_per_element_ + this->offsetLevel0_,
+                0, this->size_data_per_element_);
 
         const void* norm_vec = data_point;
         size_t dim = *((size_t*)this->dist_func_param_);
         std::vector<float> norm_buf(dim);
         if (this->normalize_) {
-            float len = this->normalize_vector((float*)data_point,
-                                               norm_buf.data(), dim);
-            memcpy(this->length_memory_ + cur_c * sizeof(float), &len,
-                   sizeof(float));
+            float len = this->normalize_vector((float*)data_point, norm_buf.data(), dim);
+            memcpy(this->length_memory_ + cur_c * sizeof(float), &len, sizeof(float));
             norm_vec = norm_buf.data();
         }
         memcpy(this->getExternalLabeLp(cur_c), &label, sizeof(labeltype));
         memcpy(this->getDataByInternalId(cur_c), norm_vec, this->data_size_);
 
         if (curlevel) {
-            this->linkLists_[cur_c] =
-                (char*)malloc(this->size_links_per_element_ * curlevel + 1);
+            this->linkLists_[cur_c] = (char*)malloc(this->size_links_per_element_ * curlevel + 1);
             if (!this->linkLists_[cur_c])
                 throw std::runtime_error("OOM: adaptive linklist");
-            memset(this->linkLists_[cur_c], 0,
-                   this->size_links_per_element_ * curlevel + 1);
+            memset(this->linkLists_[cur_c], 0, this->size_links_per_element_ * curlevel + 1);
         }
 
         std::vector<dist_t> sample_dists;
@@ -201,15 +211,12 @@ public:
                     bool changed = true;
                     while (changed) {
                         changed = false;
-                        std::unique_lock<std::mutex> lk(
-                            this->link_list_locks_[currObj]);
+                        std::unique_lock<std::mutex> lk(this->link_list_locks_[currObj]);
                         unsigned int* d = this->get_linklist(currObj, lev);
                         int sz = this->getListCount(d);
                         auto* dl = (tableint*)(d + 1);
                         for (int i = 0; i < sz; i++) {
-                            dist_t dd = this->fstdistfunc_(
-                                norm_vec, this->getDataByInternalId(dl[i]),
-                                this->dist_func_param_);
+                            dist_t dd = this->fstdistfunc_(norm_vec, this->getDataByInternalId(dl[i]), this->dist_func_param_);
                             if (sample_dists.size() < cfg.sample_k + 1) {
                                 sample_dists.push_back(dd);
                             }
@@ -233,33 +240,28 @@ public:
                     if (this->cur_element_count >= cfg.ema_warmup)
                         ema_initialized_ = true;
                 } else {
-                    ema_mean_dist_ = (1.0f - cfg.ema_alpha) * ema_mean_dist_ +
-                                     cfg.ema_alpha * mean_sample;
+                    ema_mean_dist_ = (1.0f - cfg.ema_alpha) * ema_mean_dist_ + cfg.ema_alpha * mean_sample;
                 }
             }
 
             bool epDeleted = this->isMarkedDeleted(enterpoint_copy);
 
-            size_t ef_upper = static_cast<size_t>(
-                std::max(1.0f, static_cast<float>(this->ef_construction_) *
-                                   state.efConstructionScale(cfg)));
-            size_t ef_layer0 = static_cast<size_t>(
-                std::max(1.0f, static_cast<float>(this->ef_construction_) *
-                                   state.efConstructionScaleLayer0(cfg)));
+            size_t ef_upper = static_cast<size_t>(std::max(1.0f, static_cast<float>(this->ef_construction_) * 
+                                                    state.efConstructionScale(cfg)));
+            size_t ef_layer0 = static_cast<size_t>(std::max(1.0f, static_cast<float>(this->ef_construction_) *
+                                                    state.efConstructionScaleLayer0(cfg)));
 
             for (int lev = std::min(curlevel, maxlevelcopy); lev >= 0; lev--) {
                 size_t ef_this_lev = (lev == 0) ? ef_layer0 : ef_upper;
 
                 size_t saved_ef = this->ef_construction_;
                 this->ef_construction_ = ef_this_lev;
-                auto top_candidates =
-                    this->searchBaseLayer(currObj, norm_vec, lev);
+                auto top_candidates = this->searchBaseLayer(currObj, norm_vec, lev);
                 this->ef_construction_ = saved_ef;
 
                 if (lev == 0 && dim <= cfg.angular_max_dim) {
                     float thresh = state.angularThreshold(cfg);
-                    top_candidates = angularDiversify(
-                        norm_vec, std::move(top_candidates), thresh);
+                    top_candidates = angularDiversify(norm_vec, std::move(top_candidates), thresh);
                 }
 
                 if (epDeleted) {
@@ -272,8 +274,7 @@ public:
                     if (top_candidates.size() > this->ef_construction_)
                         top_candidates.pop();
                 }
-                currObj = this->mutuallyConnectNewElement(
-                    norm_vec, cur_c, top_candidates, lev, false);
+                currObj = this->mutuallyConnectNewElement(norm_vec, cur_c, top_candidates, lev, false);
             }
         } else {
             this->enterpoint_node_ = 0;
@@ -294,9 +295,7 @@ public:
         if (this->cur_element_count == 0) return result;
 
         tableint currObj = this->enterpoint_node_;
-        dist_t curdist = this->fstdistfunc_(
-            query_data, this->getDataByInternalId(this->enterpoint_node_),
-            this->dist_func_param_);
+        dist_t curdist = this->fstdistfunc_(query_data, this->getDataByInternalId(this->enterpoint_node_), this->dist_func_param_);
 
         for (int level = this->maxlevel_; level > 0; level--) {
             bool changed = true;
@@ -307,9 +306,7 @@ public:
                 int sz = this->getListCount(d);
                 auto* dl = (tableint*)(d + 1);
                 for (int i = 0; i < sz; i++) {
-                    dist_t dd = this->fstdistfunc_(
-                        query_data, this->getDataByInternalId(dl[i]),
-                        this->dist_func_param_);
+                    dist_t dd = this->fstdistfunc_(query_data, this->getDataByInternalId(dl[i]), this->dist_func_param_);
                     if (dd < curdist) {
                         curdist = dd;
                         currObj = dl[i];
@@ -327,28 +324,22 @@ public:
             int sz = this->getListCount(d);
             auto* dl = (tableint*)(d + 1);
             for (int i = 0; i < sz && seed_dist.size() <= cfg.sample_k; i++) {
-                seed_dist.push_back(this->fstdistfunc_(
-                    query_data, this->getDataByInternalId(dl[i]),
-                    this->dist_func_param_));
+                seed_dist.push_back(this->fstdistfunc_(query_data, this->getDataByInternalId(dl[i]), this->dist_func_param_));
             }
         }
 
         AdaptiveState state = buildState(seed_dist);
         float ef_scale = state.efSearchScale(cfg);
         size_t base_ef = static_cast<size_t>(std::max(this->ef_, k));
-        size_t adapted_ef = static_cast<size_t>(std::max(
-            static_cast<float>(k), static_cast<float>(base_ef) * ef_scale));
+        size_t adapted_ef = static_cast<size_t>(std::max(static_cast<float>(k), static_cast<float>(base_ef) * ef_scale));
 
         std::priority_queue<std::pair<dist_t, tableint>,
                             std::vector<std::pair<dist_t, tableint>>,
-                            CompareByFirst>
-            top_candidates;
+                            CompareByFirst> top_candidates;
         if (this->num_deleted_)
-            top_candidates = this->template searchBaseLayerST<true, true>(
-                currObj, query_data, adapted_ef, isIdAllowed);
+            top_candidates = this->template searchBaseLayerST<true, true>(currObj, query_data, adapted_ef, isIdAllowed);
         else
-            top_candidates = this->template searchBaseLayerST<false, true>(
-                currObj, query_data, adapted_ef, isIdAllowed);
+            top_candidates = this->template searchBaseLayerST<false, true>(currObj, query_data, adapted_ef, isIdAllowed);
 
         while (top_candidates.size() > k) top_candidates.pop();
         while (!top_candidates.empty()) {
@@ -423,16 +414,12 @@ public:
     }
 
     int sampleAdaptiveLevel(const AdaptiveState& state) {
-        double scale = (state.valid && state.is_frontier)
-                           ? 1.0
-                           : static_cast<double>(state.revSizeScale(cfg));
+        double scale = (state.valid && state.is_frontier) ? 1.0 : static_cast<double>(state.revSizeScale(cfg));
         double adapted_revSize = this->revSize_ * scale;
         int level = this->getRandomLevel(adapted_revSize);
 
-        bool bootstrapping =
-            (this->cur_element_count < cfg.level_cap_bootstrap);
-        int cap = bootstrapping ? std::max(0, this->maxlevel_ + 1)
-                                : std::max(0, this->maxlevel_);
+        bool bootstrapping = (this->cur_element_count < cfg.level_cap_bootstrap);
+        int cap = bootstrapping ? std::max(0, this->maxlevel_ + 1) : std::max(0, this->maxlevel_);
         return std::min(level, cap);
     }
 
@@ -513,4 +500,4 @@ public:
     }
 };
 
-}  // namespace hnswlib
+}
